@@ -4,3 +4,6 @@ output/*
 weight/
 __pycache__
 DATA/*
+*.onnx
+*.pth
+assets/trt_cache/

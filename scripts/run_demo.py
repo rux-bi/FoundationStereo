@@ -19,17 +19,17 @@ from core.foundation_stereo import *
 if __name__=="__main__":
   code_dir = os.path.dirname(os.path.realpath(__file__))
   parser = argparse.ArgumentParser()
-  parser.add_argument('--left_file', default=f'{code_dir}/../assets/left.png', type=str)
-  parser.add_argument('--right_file', default=f'{code_dir}/../assets/right.png', type=str)
-  parser.add_argument('--intrinsic_file', default=f'{code_dir}/../assets/K.txt', type=str, help='camera intrinsic matrix and baseline file')
-  parser.add_argument('--ckpt_dir', default=f'{code_dir}/../pretrained_models/23-51-11/model_best_bp2.pth', type=str, help='pretrained model path')
+  parser.add_argument('--left_file', default=f'{code_dir}/../assets/zed_left.png', type=str)
+  parser.add_argument('--right_file', default=f'{code_dir}/../assets/zed_right.png', type=str)
+  parser.add_argument('--intrinsic_file', default=f'{code_dir}/../assets/K_zed.txt', type=str, help='camera intrinsic matrix and baseline file')
+  parser.add_argument('--ckpt_dir', default=f'{code_dir}/../pretrained_models/11-33-40/model_best_bp2.pth', type=str, help='pretrained model path')
   parser.add_argument('--out_dir', default=f'{code_dir}/../output/', type=str, help='the directory to save results')
   parser.add_argument('--scale', default=1, type=float, help='downsize the image by scale, must be <=1')
   parser.add_argument('--hiera', default=0, type=int, help='hierarchical inference (only needed for high-resolution images (>1K))')
   parser.add_argument('--z_far', default=10, type=float, help='max depth to clip in point cloud')
-  parser.add_argument('--valid_iters', type=int, default=32, help='number of flow-field updates during forward pass')
+  parser.add_argument('--valid_iters', type=int, default=1, help='number of flow-field updates during forward pass')
   parser.add_argument('--get_pc', type=int, default=1, help='save point cloud output')
-  parser.add_argument('--remove_invisible', default=1, type=int, help='remove non-overlapping observations between left and right images from point cloud, so the remaining points are more reliable')
+  parser.add_argument('--remove_invisible', default=0, type=int, help='remove non-overlapping observations between left and right images from point cloud, so the remaining points are more reliable')
   parser.add_argument('--denoise_cloud', type=int, default=1, help='whether to denoise the point cloud')
   parser.add_argument('--denoise_nb_points', type=int, default=30, help='number of points to consider for radius outlier removal')
   parser.add_argument('--denoise_radius', type=float, default=0.03, help='radius to use for outlier removal')
@@ -52,7 +52,7 @@ if __name__=="__main__":
 
   model = FoundationStereo(args)
 
-  ckpt = torch.load(ckpt_dir)
+  ckpt = torch.load(ckpt_dir,weights_only=False)
   logging.info(f"ckpt global_step:{ckpt['global_step']}, epoch:{ckpt['epoch']}")
   model.load_state_dict(ckpt['model'])
 
@@ -60,8 +60,8 @@ if __name__=="__main__":
   model.eval()
 
   code_dir = os.path.dirname(os.path.realpath(__file__))
-  img0 = imageio.imread(args.left_file)
-  img1 = imageio.imread(args.right_file)
+  img0 = imageio.imread(args.left_file)[:,:,:3]
+  img1 = imageio.imread(args.right_file)[:,:,:3]
   scale = args.scale
   assert scale<=1, "scale must be <=1"
   img0 = cv2.resize(img0, fx=scale, fy=scale, dsize=None)
@@ -74,10 +74,9 @@ if __name__=="__main__":
   img1 = torch.as_tensor(img1).cuda().float()[None].permute(0,3,1,2)
   padder = InputPadder(img0.shape, divis_by=32, force_square=False)
   img0, img1 = padder.pad(img0, img1)
-
   with torch.cuda.amp.autocast(True):
     if not args.hiera:
-      disp = model.forward(img0, img1, iters=args.valid_iters, test_mode=True)
+      disp = model.forward_onnx(img0, img1, iters=args.valid_iters, test_mode=True)
     else:
       disp = model.run_hierachical(img0, img1, iters=args.valid_iters, test_mode=True, small_ratio=0.5)
   disp = padder.unpad(disp.float())

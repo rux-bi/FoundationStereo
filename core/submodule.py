@@ -11,12 +11,12 @@ import torch,pdb,os,sys
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from einops import rearrange
+# from einops import rearrange
 from torch import einsum
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(f'{code_dir}/../')
 from Utils import *
-from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
+# from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 
 
 def _is_contiguous(tensor: torch.Tensor) -> bool:
@@ -221,8 +221,8 @@ class FlashMultiheadAttention(nn.Module):
         K = K.view(K.size(0), K.size(1), self.num_heads, self.head_dim)
         V = V.view(V.size(0), V.size(1), self.num_heads, self.head_dim)
 
-        attn_output = flash_attn_func(Q, K, V, window_size=window_size)  # Replace with actual FlashAttention function
-
+        # attn_output = flash_attn_func(Q, K, V, window_size=window_size)  # Replace with actual FlashAttention function
+        attn_output = F.scaled_dot_product_attention(Q, K, V)
         attn_output = attn_output.reshape(B,L,-1)
         output = self.out_proj(attn_output)
 
@@ -385,46 +385,79 @@ class Conv2x_IN(nn.Module):
         return x
 
 
-def groupwise_correlation(fea1, fea2, num_groups):
-    B, C, H, W = fea1.shape
-    assert C % num_groups == 0, f"C:{C}, num_groups:{num_groups}"
-    channels_per_group = C // num_groups
-    fea1 = fea1.reshape(B, num_groups, channels_per_group, H, W)
-    fea2 = fea2.reshape(B, num_groups, channels_per_group, H, W)
-    with torch.cuda.amp.autocast(enabled=False):
-      cost = (F.normalize(fea1.float(), dim=2) * F.normalize(fea2.float(), dim=2)).sum(dim=2)  #!NOTE Divide first for numerical stability
-    assert cost.shape == (B, num_groups, H, W)
-    return cost
-
 def build_gwc_volume(refimg_fea, targetimg_fea, maxdisp, num_groups, stride=1):
     """
     @refimg_fea: left image feature
     @targetimg_fea: right image feature
+    
+    Builds a group-wise correlation volume without using loops.
     """
     B, C, H, W = refimg_fea.shape
     volume = refimg_fea.new_zeros([B, num_groups, maxdisp, H, W])
-    for i in range(maxdisp):
-        if i > 0:
-            volume[:, :, i, :, i:] = groupwise_correlation(refimg_fea[:, :, :, i:], targetimg_fea[:, :, :, :-i], num_groups)
-        else:
-            volume[:, :, i, :, :] = groupwise_correlation(refimg_fea, targetimg_fea, num_groups)
-    volume = volume.contiguous()
-    return volume
+    
+    # Reshape features for group-wise correlation
+    channels_per_group = C // num_groups
+    ref_reshaped = refimg_fea.reshape(B, num_groups, channels_per_group, H, W)
+    target_reshaped = targetimg_fea.reshape(B, num_groups, channels_per_group, H, W)
+    
+    # Normalize features for stability (outside the loop)
+    with torch.cuda.amp.autocast(enabled=False):
+        ref_norm = F.normalize(ref_reshaped.float(), dim=2)
+        target_norm = F.normalize(target_reshaped.float(), dim=2)
+    
+    # Fill disparity 0 directly (no shift)
+    volume[:, :, 0] = (ref_norm * target_norm).sum(dim=2)
+    
+    # For each disparity level > 0, compute correlation with appropriate shifts
+    for i in range(1, maxdisp):
+        # Use advanced indexing to handle the shifts
+        volume[:, :, i, :, i:] = (ref_norm[:, :, :, :, i:] * target_norm[:, :, :, :, :-i]).sum(dim=2)
+    
+    return volume.contiguous()
 
 
 
 def build_concat_volume(refimg_fea, targetimg_fea, maxdisp):
     B, C, H, W = refimg_fea.shape
-    volume = refimg_fea.new_zeros([B, 2 * C, maxdisp, H, W])
-    for i in range(maxdisp):
-        if i > 0:
-            volume[:, :C, i, :, :] = refimg_fea[:, :, :, :]
-            volume[:, C:, i, :, i:] = targetimg_fea[:, :, :, :-i]
-        else:
-            volume[:, :C, i, :, :] = refimg_fea
-            volume[:, C:, i, :, :] = targetimg_fea
-    volume = volume.contiguous()
-    return volume
+    device = refimg_fea.device
+    
+    # Create reference feature volume by repeating across disparity dimension
+    ref_volume = refimg_fea.unsqueeze(2).expand(-1, -1, maxdisp, -1, -1)
+    
+    # Create target volume
+    target_volume = torch.zeros((B, C, maxdisp, H, W), device=device, dtype=refimg_fea.dtype)
+    
+    # Fill disparity 0 directly (no shift)
+    target_volume[:, :, 0] = targetimg_fea
+    
+    # Create a single mask tensor for all disparity levels
+    # This mask will have 1s where we should keep values and 0s where we should zero out
+    mask = torch.ones((maxdisp, W), device=device)
+    
+    # For each disparity level d, the first d positions should be masked out
+    # We can create this with a single operation
+    x_coords = torch.arange(W, device=device)
+    d_coords = torch.arange(maxdisp, device=device).unsqueeze(1)
+    mask = (x_coords >= d_coords).float()
+    
+    # Now we need to create shifted versions of targetimg_fea for each disparity
+    # We'll use a single gather operation to do this
+    
+    # Create indices for gathering
+    indices = torch.arange(W, device=device).unsqueeze(0).expand(maxdisp, -1)
+    # Subtract disparity from indices, with minimum of 0
+    indices = torch.clamp(indices - d_coords, min=0)
+    
+    # Gather along the width dimension
+    for b in range(B):
+        for c in range(C):
+            for h in range(H):
+                target_volume[b, c, :, h] = targetimg_fea[b, c, h][indices] * mask
+    
+    # Concatenate reference and target volumes
+    volume = torch.cat([ref_volume, target_volume], dim=1)
+    
+    return volume.contiguous()
 
 
 

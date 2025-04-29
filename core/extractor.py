@@ -344,17 +344,21 @@ class Feature(nn.Module):
 
         self.patch_size = 14
         self.d_out = [chans[0]*2+vit_feat_dim, chans[1]*2, chans[2]*2, chans[3]]
-
+        self.divider = np.lcm(self.patch_size, 16)
+        # self.H_resize = 560
+        # self.W_resize = 672
     def forward(self, x):
         B,C,H,W = x.shape
-        divider = np.lcm(self.patch_size, 16)
-        H_resize, W_resize = get_resize_keep_aspect_ratio(H,W, divider=divider, max_H=1344, max_W=1344)
+        
+        H_resize, W_resize = get_resize_keep_aspect_ratio(H,W, divider=self.divider, max_H=1344, max_W=1344)
         x_in_ = F.interpolate(x, size=(H_resize, W_resize), mode='bicubic', align_corners=False)
         self.dino = self.dino.eval()
         with torch.no_grad():
           output = self.dino(x_in_)
         vit_feat = output['out']
-        vit_feat = F.interpolate(vit_feat, size=(H//4,W//4), mode='bilinear', align_corners=True)
+        H_by_4 = H//4
+        W_by_4 = W//4
+        vit_feat = F.interpolate(vit_feat, size=(H_by_4,W_by_4), mode='bilinear', align_corners=True)
         x = self.stem(x)
         x4 = self.stages[0](x)
         x8 = self.stages[1](x4)
@@ -364,8 +368,16 @@ class Feature(nn.Module):
         x16 = self.deconv32_16(x32, x16)
         x8 = self.deconv16_8(x16, x8)
         x4 = self.deconv8_4(x8, x4)
-        x4 = torch.cat([x4, vit_feat], dim=1)
-        x4 = self.conv4(x4)
+        # import pdb; pdb.set_trace()
+        # combined_channels = 128
+        # combined = torch.zeros(B, combined_channels, H_by_4,W_by_4, device=x4.device)
+        # Fill the combined tensor manually
+        # combined[:, :x4.shape[1]] = x4
+        # combined[:, x4.shape[1]:] = vit_feat
+        # import pdb; pdb.set_trace()
+        combined = torch.cat([x4, vit_feat], dim=1)
+        x4 = self.conv4(combined)
+        # return x4, vit_feat
         return [x4, x8, x16, x32], vit_feat
 
 

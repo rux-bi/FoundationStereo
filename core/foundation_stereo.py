@@ -178,6 +178,7 @@ class FoundationStereo(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         r = self.args.corr_radius
         dx = torch.linspace(-r, r, 2*r+1, requires_grad=False).reshape(1, 1, 2*r+1, 1)
         self.dx = dx
+        self.max_disp_by_4 = self.args.max_disp//4
 
 
     def upsample_disp(self, disp, mask_feat_4, stem_2x):
@@ -190,7 +191,83 @@ class FoundationStereo(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
         return up_disp.float()
 
+    def forward_onnx(self, image1, image2, iters=12, flow_init=None, test_mode=False, low_memory=False, init_disp=None):
+        """ Estimate disparity between pair of frames """
+        B = 1
+        low_memory = low_memory or (self.args.get('low_memory', False))
+        image1 = normalize_image(image1)
+        image2 = normalize_image(image2)
+        with autocast(enabled=self.args.mixed_precision):
+            out, vit_feat = self.feature(torch.cat([image1, image2], dim=0))
+            # return out
+            vit_feat = vit_feat[:B]
+            features_left = [o[:B] for o in out]
+            features_right = [o[B:] for o in out]
+            stem_2x = self.stem_2(image1)
+            
+            gwc_volume = build_gwc_volume(features_left[0], features_right[0], self.max_disp_by_4, self.cv_group)  # Group-wise correlation volume (B, N_group, max_disp, H, W)
+            left_tmp = self.proj_cmb(features_left[0])
+            right_tmp = self.proj_cmb(features_right[0])
+            concat_volume = build_concat_volume(left_tmp, right_tmp, maxdisp=self.max_disp_by_4)
+            del left_tmp, right_tmp
+            comb_volume = torch.cat([gwc_volume, concat_volume], dim=1)
+            comb_volume = self.corr_stem(comb_volume)
+            comb_volume = self.corr_feature_att(comb_volume, features_left[0])
+            comb_volume = self.cost_agg(comb_volume, features_left)
+            # Init disp from geometry encoding volume
+            prob = F.softmax(self.classifier(comb_volume).squeeze(1), dim=1)  #(B, max_disp, H, W)
+            if init_disp is None:
+              init_disp = disparity_regression(prob, self.max_disp_by_4)  # Weighted  sum of disparity
+        
+            cnet_list = self.cnet(image1, vit_feat=vit_feat, num_layers=self.args.n_gru_layers)   #(1/4, 1/8, 1/16)
+            cnet_list = list(cnet_list)
+            net_list = [torch.tanh(x[0]) for x in cnet_list]   # Hidden information
+            inp_list = [torch.relu(x[1]) for x in cnet_list]   # Context information list of pyramid levels
+            inp_list = [self.cam(x) * x for x in inp_list]
+            att = [self.sam(x) for x in inp_list]
+        geo_fn = Combined_Geo_Encoding_Volume(features_left[0].float(), features_right[0].float(), comb_volume.float(), num_levels=self.args.corr_levels, dx=self.dx)
+        b, c, h, w = features_left[0].shape
+        coords = torch.arange(w, dtype=torch.float, device=init_disp.device).reshape(1,1,w,1).repeat(b, h, 1, 1)  # (B,H,W,1) Horizontal only
+        disp = init_disp.float()
+        disp_preds = []
+        # torch.save({
+        #     "inp_list": inp_list,
+        #     "att": att,
+        #     "coords": coords,
+        #     "init_disp": init_disp,
+        #     "stem_2x": stem_2x,
+        #     "left": features_left[0],
+        #     "right": features_right[0],
+        #     "comb_volume": comb_volume,
+        #     "dx": self.dx,
+        #     "net_list": net_list,
+        #     # "geo_fn": geo_fn,
+        # }, "/offboard/FoundationStereo/assets/simplified_onnx_inputs.pth")
+        # import pdb; pdb.set_trace()
+        # return disp
+        # GRUs iterations to update disparity (1/4 resolution)
+        for itr in range(iters):
+            disp = disp.detach()
+            geo_feat = geo_fn(disp, coords, low_memory=low_memory)
+            with autocast(enabled=self.args.mixed_precision):
+              net_list, mask_feat_4, delta_disp = self.update_block(net_list, inp_list, geo_feat, disp, att)
 
+            disp = disp + delta_disp.float()
+            if test_mode and itr < iters-1:
+                continue
+
+            # upsample predictions
+            disp_up = self.upsample_disp(disp.float(), mask_feat_4.float(), stem_2x.float())
+            disp_preds.append(disp_up)
+
+
+        if test_mode:
+            return disp_up
+
+        return init_disp, disp_preds
+    
+    
+    
     def forward(self, image1, image2, iters=12, flow_init=None, test_mode=False, low_memory=False, init_disp=None):
         """ Estimate disparity between pair of frames """
         B = len(image1)

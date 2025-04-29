@@ -15,7 +15,8 @@ import pandas as pd
 import open3d as o3d
 import cv2
 import numpy as np
-from transformations import *
+import math
+# from transformations import *
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(code_dir)
 
@@ -91,7 +92,7 @@ def get_resize_keep_aspect_ratio(H, W, divider=16, max_H=1232, max_W=1232):
   assert max_W%divider==0
 
   def round_by_divider(x):
-    return int(np.ceil(x/divider)*divider)
+    return int(math.ceil(x/divider)*divider)
 
   H_resize = round_by_divider(H)   #!NOTE KITTI width=1242
   W_resize = round_by_divider(W)
