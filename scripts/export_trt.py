@@ -35,9 +35,10 @@ class FoundationStereoOnnx(nn.Module):
         return disp
 
 
-def save_outputs(disp, img0_ori, padder, output_path, engine_type):
+def save_outputs(disp, padder, img0_ori, output_path, engine_type):
     intrinsic_file = "/offboard/FoundationStereo/assets/K_zed.txt"
     disp = padder.unpad(disp.float())
+    disp = disp.float()
     disp = disp.data.cpu().numpy().reshape(360,640)
     vis = vis_disparity(disp)
     imageio.imwrite(f'{output_path}/vis_{engine_type}.png', vis)
@@ -79,14 +80,13 @@ if __name__ == '__main__':
     output_path = "/offboard/FoundationStereo/output"
     onnx_path = "/offboard/FoundationStereo/assets/foundation_stereo.onnx"
     onnx_path_inferred = "/offboard/FoundationStereo/assets/foundation_stereo_inferred.onnx"
-    left_img = imageio.imread("/offboard/FoundationStereo/assets/zed_left.png")[:,:,:3]
+    left_img = imageio.imread("/offboard/FoundationStereo/assets/zed_left2.png")[:,:,:3]
     img0_ori = left_img.copy()
     left_img = torch.as_tensor(left_img).cuda().float()[None].permute(0,3,1,2)
     input_padder = InputPadder(left_img.shape, divis_by=32, force_square=False)
-    right_img = imageio.imread("/offboard/FoundationStereo/assets/zed_right.png")[:,:,:3]
+    right_img = imageio.imread("/offboard/FoundationStereo/assets/zed_right2.png")[:,:,:3]
     right_img = torch.as_tensor(right_img).cuda().float()[None].permute(0,3,1,2)
     left_img, right_img = input_padder.pad(left_img, right_img)
-    
     # height = 480
     # width = 640
     # left_img = torch.randn(1, 3, height, width).cuda().float()
@@ -104,7 +104,7 @@ if __name__ == '__main__':
         model.cuda()
         model.eval()
         out = model(left_img, right_img)
-        save_outputs(out, img0_ori, input_padder, output_path, "torch")
+        save_outputs(out, input_padder, img0_ori, output_path, "torch")
         # Run optimization passes to reduce model size
         torch.onnx.export(
             model,
@@ -226,4 +226,4 @@ if __name__ == '__main__':
         m_onnx: Measurement = timer_onnx.blocked_autorange(min_run_time=1)
     print(m_torch)
     print(m_onnx)
-    save_outputs(binded_disp, img0_ori, input_padder, output_path, "trt")
+    save_outputs(binded_disp, input_padder, img0_ori, output_path, "trt")
