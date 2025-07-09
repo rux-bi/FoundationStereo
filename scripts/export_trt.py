@@ -80,11 +80,11 @@ if __name__ == '__main__':
     output_path = "/offboard/FoundationStereo/output"
     onnx_path = "/offboard/FoundationStereo/assets/foundation_stereo.onnx"
     onnx_path_inferred = "/offboard/FoundationStereo/assets/foundation_stereo_inferred.onnx"
-    left_img = imageio.imread("/offboard/FoundationStereo/assets/zed_left2.png")[:,:,:3]
+    left_img = imageio.imread("/offboard/FoundationStereo/assets/zed_left.png")[:,:,:3]
     img0_ori = left_img.copy()
     left_img = torch.as_tensor(left_img).cuda().float()[None].permute(0,3,1,2)
     input_padder = InputPadder(left_img.shape, divis_by=32, force_square=False)
-    right_img = imageio.imread("/offboard/FoundationStereo/assets/zed_right2.png")[:,:,:3]
+    right_img = imageio.imread("/offboard/FoundationStereo/assets/zed_right.png")[:,:,:3]
     right_img = torch.as_tensor(right_img).cuda().float()[None].permute(0,3,1,2)
     left_img, right_img = input_padder.pad(left_img, right_img)
     # height = 480
@@ -167,6 +167,7 @@ if __name__ == '__main__':
     io_binding = sess.io_binding()
     device_type = right_img.device.type
     binded_disp = torch.zeros_like(out)
+    # Reinstall onnxruntime-gpu if encountering device type related error
     io_binding.bind_input(
         name='left',
         device_type=device_type,
