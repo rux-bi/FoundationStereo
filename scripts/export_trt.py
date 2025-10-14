@@ -53,14 +53,14 @@ def save_outputs(disp, padder, img0_ori, output_path, engine_type):
     keep_ids = np.arange(len(np.asarray(pcd.points)))[keep_mask]
     pcd = pcd.select_by_index(keep_ids)
     o3d.io.write_point_cloud(f'{output_path}/cloud_{engine_type}.ply', pcd)
-    logging.info("Visualizing point cloud. Press ESC to exit.")
-    vis = o3d.visualization.Visualizer()
-    vis.create_window()
-    vis.add_geometry(pcd)
-    vis.get_render_option().point_size = 1.0
-    vis.get_render_option().background_color = np.array([0.5, 0.5, 0.5])
-    vis.run()
-    vis.destroy_window()
+    # logging.info("Visualizing point cloud. Press ESC to exit.")
+    # vis = o3d.visualization.Visualizer()
+    # vis.create_window()
+    # vis.add_geometry(pcd)
+    # vis.get_render_option().point_size = 1.0
+    # vis.get_render_option().background_color = np.array([0.5, 0.5, 0.5])
+    # vis.run()
+    # vis.destroy_window()
 
 if __name__ == '__main__':
     torch.autograd.set_grad_enabled(False)
@@ -151,7 +151,7 @@ if __name__ == '__main__':
         ('TensorrtExecutionProvider', {
             'device_id': 0,                     # Select GPU to execute
             "trt_engine_cache_enable": True,
-            'trt_max_workspace_size': 4294967296,
+            'trt_max_workspace_size': 8589934592,
             # 'trt_engine_cache_path': f"{trt_cache_path}/{trt_engine_name}",
             'trt_engine_cache_path': trt_cache_path,
             'trt_fp16_enable': True,              # Enable FP16 precision for faster inference              
