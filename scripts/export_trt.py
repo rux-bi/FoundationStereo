@@ -76,7 +76,7 @@ if __name__ == '__main__':
     
     # left_img = torch.randn(1, 3, args.height, args.width).cuda().float()
     # right_img = torch.randn(1, 3, args.height, args.width).cuda().float()
-    valid_iters = 5
+    valid_iters = 2
     output_path = "/offboard/FoundationStereo/output"
     onnx_path = "/offboard/FoundationStereo/assets/foundation_stereo.onnx"
     onnx_path_inferred = "/offboard/FoundationStereo/assets/foundation_stereo_inferred.onnx"
@@ -154,6 +154,7 @@ if __name__ == '__main__':
             'trt_max_workspace_size': 8589934592,
             # 'trt_engine_cache_path': f"{trt_cache_path}/{trt_engine_name}",
             'trt_engine_cache_path': trt_cache_path,
+            'trt_engine_cache_prefix': "foundation_stereo",
             'trt_fp16_enable': True,              # Enable FP16 precision for faster inference              
             # 'trt_layer_norm_fp32_fallback': True, 
         }),
